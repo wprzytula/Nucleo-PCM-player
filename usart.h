@@ -1,3 +1,6 @@
+#ifndef USART_H
+#define USART_H
+
 #include <stm32.h>
 #include <gpio.h>
 
@@ -26,3 +29,5 @@
 #define HSI_HZ 16000000U
 #define PCLK1_HZ HSI_HZ
 #define BAUD_RATE 9600U
+
+#endif

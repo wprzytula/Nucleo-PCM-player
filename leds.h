@@ -1,3 +1,6 @@
+#ifndef LEDS_H
+#define LEDS_H
+
 #include <stm32.h>
 #include <gpio.h>
 
@@ -43,3 +46,5 @@
     do { \
         if (!((GREEN2_LED_GPIO->ODR >> GREEN2_LED_PIN) & 1)) Green2LEDon(); else Green2LEDoff(); \
     } while(0)
+
+#endif

@@ -1,3 +1,6 @@
+#ifndef BUTTONS_H
+#define BUTTONS_H
+
 #include <stm32.h>
 #include <gpio.h>
 
@@ -43,3 +46,5 @@
     (!((JOYSTICK_GPIO->IDR >> JOYSTICK_RIGHT_PIN) & 1))
 #define JOYSTICK_ACTION_is_pressed() \
     (!((JOYSTICK_GPIO->IDR >> JOYSTICK_ACTION_PIN) & 1))
+
+#endif
