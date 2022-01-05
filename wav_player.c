@@ -8,35 +8,37 @@
 #include "buttons.h"
 #include "pcm.h"
 
-bool at_button_state, user_button_state, joystick_left_state, joystick_right_state,
-    joystick_up_state, joystick_down_state, joystick_action_state;
-
 #define TIM_SAMPLE TIM2
 #define TIM_PWM TIM3
 #define STM_CLOCKING_MHZ 16
 #define STM_CLOCKING (1000000 * STM_CLOCKING_MHZ)
 #define BOUNCING_DELAY_MS 5 // 5 ms should suffice
 #define BOUNCING_T (250 * BOUNCING_DELAY_MS * STM_CLOCKING_MHZ)
+#define REPEAT_DELAY_MS 500 // 0.5 s seems reasonable
 
-size_t sample_idx; // Index of the currently played sample.
+volatile size_t sample_idx; // Index of the currently played sample.
 
+#define VOLUME_DIVISOR 20
+// The value the currently played sample is multiplied by
+// before being divided by VOLUME_DIVISOR, in order to scale volume.
+volatile size_t volume_factor = VOLUME_DIVISOR;
 
 /* PLAYBACK ROUTINES */
 
+/* Configures PWM timer to constantly output given sample. */
 static void emit_sample(uint8_t sample) {
 
     // temporarily disable PWM timer in order to reconfigure it for the next sample
     TIM_PWM->CR1 &= ~TIM_CR1_CEN;
 
     // setup PWM timer
-
     TIM_PWM->PSC = 0;
     TIM_PWM->ARR = 254; // Rezultat: Proporcjonalne oddanie amplitudy fali.
-    TIM_PWM->CCR1 = sample;
+    TIM_PWM->CCR1 = sample * volume_factor / 10;
     TIM_PWM->EGR = TIM_EGR_UG;
 
-    // Włączamy licznik w trybie zliczania w górę z buforowaniem rejestru TIM_PWM->ARR
-    TIM_PWM->CR1 = TIM_CR1_ARPE | TIM_CR1_CEN;
+    // Włączamy licznik w trybie zliczania w górę.
+    TIM_PWM->CR1 = TIM_CR1_CEN;
 }
 
 /* With each call, plays next sample of the current song. Does so in a cyclic manner. */
@@ -57,7 +59,7 @@ static void reconfigure_sampling_timer(size_t sample_rate) {
     TIM3->CR1 &= ~TIM_CR1_UDIS;
 }
 
-bool playback_is_on = false;
+volatile bool playback_is_on = false;
 
 static void playback_on() {
     playback_is_on = true;
@@ -78,6 +80,16 @@ static void toggle_playback() {
         playback_on();
 }
 
+static void volume_up() {
+    if (volume_factor < VOLUME_DIVISOR)
+        ++volume_factor;
+}
+
+static void volume_down() {
+    if (volume_factor > 1)
+        --volume_factor;
+}
+
 static void next_song() {
     change_PCM(1);
     reconfigure_sampling_timer(PCM->sample_rate);
@@ -93,7 +105,7 @@ static void prev_song() {
 
 /* USER INPUT HANDLERS */
 
-#define action_on_pressed(button, action) \
+#define action_on_pressed_once(button, action) \
     do { \
         if (button ## _is_pressed()) { \
             Delay(BOUNCING_T); \
@@ -105,13 +117,32 @@ static void prev_song() {
         } \
     } while(false)
 
+#define action_on_pressed_with_repetitions(button, action) \
+    do { \
+        if (button ## _is_pressed()) { \
+            Delay(BOUNCING_T); \
+            counter = 0; \
+            while (button ## _is_pressed()) { \
+                action(); \
+                while (button ## _is_pressed() && counter < timeout) { \
+                    Delay(BOUNCING_T); \
+                    ++counter; \
+                } \
+            } \
+        } \
+    } while(false)
+
 /* Responds to the event of any joystick button being pushed. */
 static void joystick_operation() {
     EXTI->PR = 0xFFFFFFFF;
+    static size_t const timeout = REPEAT_DELAY_MS / BOUNCING_DELAY_MS; //
 
-    action_on_pressed(JOYSTICK_ACTION, toggle_playback);
-    action_on_pressed(JOYSTICK_LEFT, prev_song);
-    action_on_pressed(JOYSTICK_RIGHT, next_song);
+    size_t counter;
+    action_on_pressed_once(JOYSTICK_ACTION, toggle_playback);
+    action_on_pressed_once(JOYSTICK_LEFT, prev_song);
+    action_on_pressed_once(JOYSTICK_RIGHT, next_song);
+    action_on_pressed_with_repetitions(JOYSTICK_UP, volume_up);
+    action_on_pressed_with_repetitions(JOYSTICK_DOWN, volume_down);
 }
 
 /* INTERRUPTS CONFIGURATION */
@@ -126,18 +157,23 @@ void TIM2_IRQHandler(void) {
 }
 
 /* Joystick interrupts handlers */
+
+// joystick action
 void EXTI15_10_IRQHandler(void) {
     joystick_operation();
 }
 
+// joystick up/down
 void EXTI9_5_IRQHandler(void) {
     joystick_operation();
 }
 
+// joystick right
 void EXTI4_IRQHandler(void) {
     joystick_operation();
 }
 
+// joystick left
 void EXTI3_IRQHandler(void) {
     joystick_operation();
 }
@@ -203,5 +239,5 @@ int main() {
     reconfigure_sampling_timer(PCM->sample_rate);
 
     // OFF by default, since playback still needs to be turned on by pushing joystick action.
-    // TIM_SAMPLE->CR1 = TIM_CR1_CEN; 
+    // TIM_SAMPLE->CR1 = TIM_CR1_CEN;
 }
