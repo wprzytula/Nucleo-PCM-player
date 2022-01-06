@@ -21,7 +21,7 @@ static void init_PCM_arr() {
     PCM_arr[3] = PCM_UNDERTALE;
 }
 
-pcm_t const* PCM = PCM_arr;
+pcm_t const* PCM = PCM_arr + 3; // UNDERTALE begins
 
 static void change_PCM(int direction) {
     static size_t idx = PCM_len - 1;
