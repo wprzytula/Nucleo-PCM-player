@@ -7,7 +7,6 @@
 #include "buttons.h"
 #include "pcm.h"
 #include "irq.h"
-#include "usart.h"
 
 // Timer for scheduling samples
 #define TIM_SAMPLE TIM2
@@ -29,12 +28,7 @@ volatile size_t sample_idx; // Index of the currently played sample.
 volatile size_t volume_factor = VOLUME_DIVISOR;
 
 #ifdef DEBUG
-static bool const DEBUG = true;
-#else
-static bool const DEBUG = false;
-#endif
-
-#ifdef DEBUG
+#include "usart.h"
 /* USART DEBUG MODULE */
 
 struct string {
@@ -50,7 +44,7 @@ struct send_buff {
     struct string data[SND_BUFF_CAP];
 };
 
-// this 0-initializes send buffer configuration
+// This 0-initializes send buffer configuration (BSS guarantee).
 struct send_buff snd_buff;
 
 #define can_send() (snd_buff.size > 0 && \
@@ -74,7 +68,7 @@ void try_send() {
 
     register struct string str = snd_buff.data[snd_buff.beg];
 
-    // inicjacja wysyłania
+    // Initialize sending
     DMA1_Stream6->M0AR = (uint32_t)(str.ptr);
     DMA1_Stream6->NDTR = str.len;
     DMA1_Stream6->CR |= DMA_SxCR_EN;
@@ -100,12 +94,11 @@ static void emit_sample(uint8_t sample) {
     // Temporarily disable PWM timer in order to reconfigure it for the next sample
     TIM_PWM->CR1 &= ~TIM_CR1_CEN;
 
-    // setup PWM timer
+    // Setup PWM timer
     TIM_PWM->CNT = 0;
     TIM_PWM->CCR1 = sample * volume_factor / 10;
     TIM_PWM->EGR = TIM_EGR_UG;
 
-    // Włączamy licznik w trybie zliczania w górę.
     TIM_PWM->CR1 = TIM_CR1_CEN;
 }
 
@@ -219,6 +212,7 @@ static void(*get_action(pressed_button_t button))(void) {
 
 volatile irq_level_t level;
 
+/* Schedules delay required by bounce mitigation algorithm. */
 static void schedule_delay() {
     debug("Delay scheduled.");
     level = IRQprotect(LOW_IRQ_PRIO);
@@ -228,6 +222,7 @@ static void schedule_delay() {
     // So we mask before scheduling Delay, and unmask in Delay interrupt handler.
 }
 
+/* State of bouncing mitigation algorithm. */
 struct input_state {
     enum {IDLE, BEFORE_ACTION, AFTER_ACTION} state;
     pressed_button_t button;
@@ -236,7 +231,8 @@ struct input_state {
 };
 
 /* Responds to the event of any joystick button being pushed.
- * It is assumed that only one joystick button may be pushed at a time. */
+ * It is assumed that only one joystick button may be pushed at a time.
+ * Implements bouncing mitigation algorithm. */
 static void joystick_operation() {
     debug("\r\nJoystick operation.");
     EXTI->PR = 0xFFFFFFFF;
@@ -358,11 +354,10 @@ int main() {
                     GPIO_PuPd_NOPULL,
                     GPIO_AF_TIM3);
 
-    // Konfigurujemy linię wyjściową OC1REF w trybie PWM 1;
-    // rejestr TIM_PWM->CCR1 jest buforowany.
+    // Configure line OC1REF in PWM 1 mode; TIM_PWM->CCR1 is being buffered.
     TIM_PWM->CCMR1 = TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1PE;
 
-    // Podłączamy linie wyjściowe do wyprowadzeń, stan aktywny to stan wysoki.
+    // Connect output lines to pins, active state is high state.
     TIM_PWM->CCER = TIM_CCER_CC1E | TIM_CCER_CC2E;
 
     TIM_PWM->PSC = 0; // Prescaler won't be needed.
@@ -372,7 +367,7 @@ int main() {
     /* Sampling timer (TIM2) */
     TIM_SAMPLE->PSC = 0; // Prescaler won't be needed.
 
-    // Ustawiamy przerwanie uaktualnienia
+    // Setup update interrupt
     TIM_SAMPLE->SR = ~TIM_SR_UIF;
     TIM_SAMPLE->DIER = TIM_DIER_UIE;
     NVIC_EnableIRQ(TIM2_IRQn);
@@ -385,7 +380,7 @@ int main() {
     TIM_BOUNCE->ARR = BOUNCING_DELAY_MS * STM_CLOCKING_MHZ * 1000;
     TIM_BOUNCE->EGR = TIM_EGR_UG;
 
-    // Ustawiamy przerwanie uaktualnienia
+    // Setup update interrupt
     TIM_BOUNCE->SR = ~TIM_SR_UIF;
     TIM_BOUNCE->DIER = TIM_DIER_UIE;
     NVIC_EnableIRQ(TIM5_IRQn);
@@ -409,38 +404,38 @@ int main() {
     NVIC_EnableIRQ(EXTI9_5_IRQn);
     NVIC_EnableIRQ(EXTI15_10_IRQn);
 
-    if (DEBUG) {
-        /* USART config */
-        RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
+#ifdef DEBUG
+    /* USART config */
+    RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
 
-        GPIOafConfigure(GPIOA,
-                        2,
-                        GPIO_OType_PP,
-                        GPIO_Fast_Speed,
-                        GPIO_PuPd_NOPULL,
-                        GPIO_AF_USART2);
+    GPIOafConfigure(GPIOA,
+                    2,
+                    GPIO_OType_PP,
+                    GPIO_Fast_Speed,
+                    GPIO_PuPd_NOPULL,
+                    GPIO_AF_USART2);
 
-        USART2->CR1 = USART_Mode_Tx | USART_WordLength_8b | USART_Parity_No;
-        USART2->CR2 = USART_StopBits_1;
-        USART2->CR3 = USART_CR3_DMAT;
-        USART2->BRR = (PCLK1_HZ + (BAUD_RATE / 2U)) / BAUD_RATE;
-        USART2->CR1 |= USART_Enable;
+    USART2->CR1 = USART_Mode_Tx | USART_WordLength_8b | USART_Parity_No;
+    USART2->CR2 = USART_StopBits_1;
+    USART2->CR3 = USART_CR3_DMAT;
+    USART2->BRR = (PCLK1_HZ + (BAUD_RATE / 2U)) / BAUD_RATE;
+    USART2->CR1 |= USART_Enable;
 
 
-        /* DMA config */
-        RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN;
+    /* DMA config */
+    RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN;
 
-        DMA1_Stream6->CR = 4U << 25
-                           | DMA_SxCR_PL_1
-                           | DMA_SxCR_MINC
-                           | DMA_SxCR_DIR_0
-                           | DMA_SxCR_TCIE;
+    DMA1_Stream6->CR = 4U << 25
+                       | DMA_SxCR_PL_1
+                       | DMA_SxCR_MINC
+                       | DMA_SxCR_DIR_0
+                       | DMA_SxCR_TCIE;
 
-        DMA1_Stream6->PAR = (uint32_t) &USART2->DR;
+    DMA1_Stream6->PAR = (uint32_t) &USART2->DR;
 
-        DMA1->HIFCR = DMA_HIFCR_CTCIF6; // interrupt markers cleanup
-        NVIC_EnableIRQ(DMA1_Stream6_IRQn); // enable DMA interrupt
+    DMA1->HIFCR = DMA_HIFCR_CTCIF6; // interrupt markers cleanup
+    NVIC_EnableIRQ(DMA1_Stream6_IRQn); // enable DMA interrupt
 
-        debug("Initialization finished.");
-    }
+    debug("Initialization finished.");
+#endif
 }
